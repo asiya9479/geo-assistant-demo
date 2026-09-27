@@ -58,20 +58,15 @@ def search_docs(q, role):
 def ask_ai(question, hits, api_url, api_key, model):
     context="\n\n".join(f"MƏNBƏ: {h[1]}\n{h[2]}" for h in hits)
     if not api_key or not api_url:
-        return "GPT bağlantısı üçün sol paneldə API açarını daxil edin."
-    if hits:
-        prompt=f"""Sən Geo Assistant-san. Aşağıdakı arxiv mənbələrinə əsaslanaraq Azərbaycan dilində cavab ver.
-Mənbənin adını göstər. Mənbələrdə cavab yoxdursa bunu açıq de; fakt uydurma.
+        return "AI API qoşulmayıb. Aşağıda sorğunuza uyğun lokal arxiv mənbələri göstərilir."
+    prompt=f"""Sən Geo Assistant-san. Yalnız verilmiş geoloji arxiv kontekstinə əsaslan.
+Cavabı Azərbaycan dilində, aydın və peşəkar ver. Faktın mənbəsini sənəd adı ilə göstər.
+Kontekstdə cavab yoxdursa bunu açıq de.
 
 SUAL: {question}
 
 ARXİV:
 {context}"""
-    else:
-        prompt=f"""Sən Geo Assistant-san. İstifadəçinin sualına Azərbaycan dilində aydın cavab ver.
-Bu sual üçün arxiv mənbəsi tapılmayıb. Arxiv məlumatı varmış kimi iddia etmə.
-
-SUAL: {question}"""
     url=api_url.rstrip("/") + "/chat/completions"
     r=requests.post(url, headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},
         json={"model":model,"messages":[{"role":"user","content":prompt}],"temperature":0.1}, timeout=90)
@@ -119,17 +114,17 @@ with tab_chat:
     q=st.text_area("Sual", placeholder="Məsələn: Bu ərazidə əvvəllər hansı seysmik tədqiqatlar aparılıb?")
     if st.button("Cavab tap", type="primary", disabled=not q.strip()):
         hits=search_docs(q,role)
-        try: answer=ask_ai(q,hits,api_url,api_key,model)
-        except Exception as e: answer=f"AI bağlantısında xəta: {e}"
-        st.markdown("### Cavab")
-        st.write(answer)
-        if hits:
+        if not hits:
+            st.warning("İcazəniz çərçivəsində uyğun mənbə tapılmadı.")
+        else:
+            try: answer=ask_ai(q,hits,api_url,api_key,model)
+            except Exception as e: answer=f"AI bağlantısında xəta: {e}\n\nLokal mənbələr aşağıda göstərilir."
+            st.markdown("### Cavab")
+            st.write(answer)
             st.markdown("### Mənbələr")
             for score,name,snippet,access in hits:
                 with st.expander(f"{name} · {access} · uyğunluq {score}"):
                     st.text(snippet[:2200])
-        else:
-            st.caption("Bu cavab institut arxivində tapılmış sənədə əsaslanmır.")
 
 with tab_map:
     st.subheader("GIS və quyu xəritəsi")
