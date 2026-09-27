@@ -1,6 +1,6 @@
 import streamlit as st
 from pathlib import Path
-import sqlite3, re, requests
+import sqlite3, re
 import pandas as pd
 from pypdf import PdfReader
 from docx import Document
@@ -37,7 +37,8 @@ def extract(path):
     return ""
 
 def search_docs(q, role):
-    words = [w.lower() for w in re.findall(r"\w+", q) if len(w)>2]
+    stopwords = {"hansı", "hansılardır", "nədir", "necə", "və", "ilə", "olan", "üçün", "bu", "bir", "əsas", "haqqında", "harada", "olub", "edir"}
+    words = {w[:5] for w in re.findall(r"\w+", q.casefold()) if len(w)>3 and w not in stopwords}
     con = db()
     rows = con.execute("SELECT name,text,access FROM documents").fetchall()
     con.close()
@@ -47,31 +48,21 @@ def search_docs(q, role):
     hits=[]
     for name, text, access in rows:
         if access not in allowed: continue
-        low=text.lower()
-        score=sum(low.count(w) for w in words)
-        if score:
-            pos=min([low.find(w) for w in words if low.find(w)>=0] or [0])
-            snippet=text[max(0,pos-500):pos+1800]
-            hits.append((score,name,snippet,access))
+        # PDF-dəki cümlələri balına görə seç; cavab mətnini dəyişdirmə.
+        sentences = re.split(r"(?<=[.!?])\s+|\n{2,}", text or "")
+        ranked=[]
+        for sentence in sentences:
+            sentence = " ".join(sentence.split())
+            if len(sentence) < 25: continue
+            terms = re.findall(r"\w+", sentence.casefold())
+            matched = sum(any(term.startswith(word) for term in terms) for word in words)
+            if matched:
+                ranked.append((matched, sentence[:900]))
+        if ranked:
+            ranked.sort(key=lambda x: (-x[0], len(x[1])))
+            selected = ranked[:3]
+            hits.append((sum(x[0] for x in selected), name, "\n\n".join(x[1] for x in selected), access))
     return sorted(hits, reverse=True)[:5]
-
-def ask_ai(question, hits, api_url, api_key, model):
-    context="\n\n".join(f"MƏNBƏ: {h[1]}\n{h[2]}" for h in hits)
-    if not api_key or not api_url:
-        return "AI API qoşulmayıb. Aşağıda sorğunuza uyğun lokal arxiv mənbələri göstərilir."
-    prompt=f"""Sən Geo Assistant-san. Yalnız verilmiş geoloji arxiv kontekstinə əsaslan.
-Cavabı Azərbaycan dilində, aydın və peşəkar ver. Faktın mənbəsini sənəd adı ilə göstər.
-Kontekstdə cavab yoxdursa bunu açıq de.
-
-SUAL: {question}
-
-ARXİV:
-{context}"""
-    url=api_url.rstrip("/") + "/chat/completions"
-    r=requests.post(url, headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},
-        json={"model":model,"messages":[{"role":"user","content":prompt}],"temperature":0.1}, timeout=90)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
 
 st.title("🌍 Geo Assistant")
 st.caption("Rəqəmsal Geoloji Arxiv və Analiz Köməkçisi")
@@ -79,14 +70,8 @@ st.caption("Rəqəmsal Geoloji Arxiv və Analiz Köməkçisi")
 with st.sidebar:
     st.header("İstifadəçi")
     role=st.selectbox("Rol", ["Tələbə/Təcrübəçi","Geoloq/Alim","Rəhbərlik/Admin"])
-    st.divider()
-    st.header("AI bağlantısı")
-    api_url=st.text_input("OpenAI-compatible API URL", "https://api.openai.com/v1")
-    api_key=st.text_input("API açarı", type="password")
-    model=st.text_input("Model", "gpt-4.1-mini")
-    st.caption("Açar saxlanmır; yalnız cari sessiyada istifadə olunur.")
 
-tab_chat, tab_docs, tab_map, tab_admin = st.tabs(["💬 AI Çat","📚 Arxiv","🗺️ GIS Xəritəsi","⚙️ İdarəetmə"])
+tab_chat, tab_docs, tab_map, tab_admin = st.tabs(["🔎 Sənəddən soruş","📚 Arxiv","🗺️ GIS Xəritəsi","⚙️ İdarəetmə"])
 
 with tab_docs:
     st.subheader("Geoloji sənədlər")
@@ -114,17 +99,13 @@ with tab_chat:
     q=st.text_area("Sual", placeholder="Məsələn: Bu ərazidə əvvəllər hansı seysmik tədqiqatlar aparılıb?")
     if st.button("Cavab tap", type="primary", disabled=not q.strip()):
         hits=search_docs(q,role)
-        if not hits:
-            st.warning("İcazəniz çərçivəsində uyğun mənbə tapılmadı.")
-        else:
-            try: answer=ask_ai(q,hits,api_url,api_key,model)
-            except Exception as e: answer=f"AI bağlantısında xəta: {e}\n\nLokal mənbələr aşağıda göstərilir."
-            st.markdown("### Cavab")
-            st.write(answer)
-            st.markdown("### Mənbələr")
+        if hits:
+            st.markdown("### PDF-də tapılan hissələr")
             for score,name,snippet,access in hits:
-                with st.expander(f"{name} · {access} · uyğunluq {score}"):
-                    st.text(snippet[:2200])
+                st.markdown(f"**Mənbə: {name}**")
+                st.info(snippet)
+        else:
+            st.warning("Bu sual üçün sənədlərdə uyğun mətn tapılmadı. PDF skandırsa, mətni oxumaq üçün OCR lazımdır.")
 
 with tab_map:
     st.subheader("GIS və quyu xəritəsi")
